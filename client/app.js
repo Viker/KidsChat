@@ -13,7 +13,7 @@ let audioContext;
 let mediaStream;
 let isMuted = false;
 let processor;
-const BUFFER_SIZE = 2048;
+const BUFFER_SIZE = 4096; // Increased buffer size for more stable processing
 
 // Voice Activity Detection
 let analyser;
@@ -51,14 +51,19 @@ function init() {
 }
 
 function setupVoiceDetection(source) {
-    // Set up analyzer for voice activity detection
+    // Set up analyzer for voice activity detection with improved settings
     analyser = audioContext.createAnalyser();
-    analyser.fftSize = 256;
+    analyser.fftSize = 1024; // Increased for better frequency resolution
+    analyser.smoothingTimeConstant = 0.8; // Add smoothing to reduce crackling
     source.connect(analyser);
     
-    // Create script processor for audio transmission
+    // Create script processor for audio transmission with gain control
+    const gainNode = audioContext.createGain();
+    gainNode.gain.value = 0.8; // Reduce gain slightly to prevent clipping
+    
     processor = audioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
-    source.connect(processor);
+    source.connect(gainNode);
+    gainNode.connect(processor);
     processor.connect(audioContext.destination);
     
     // Handle voice activity detection
@@ -164,7 +169,11 @@ async function initializeAudio() {
             audio: {
                 echoCancellation: true,
                 noiseSuppression: true,
-                autoGainControl: true
+                autoGainControl: true,
+                sampleRate: 48000,
+                channelCount: 1,
+                latency: 0.01,
+                volume: 1.0
             }
         });
         
@@ -201,7 +210,26 @@ socket.on('voice_data', (data) => {
             
             const source = audioContext.createBufferSource();
             source.buffer = buffer;
-            source.connect(audioContext.destination);
+            
+            // Add gain node for smooth playback
+            const gainNode = audioContext.createGain();
+            gainNode.gain.value = 0.8;
+            
+            // Add lowpass filter to reduce high-frequency noise
+            const filter = audioContext.createBiquadFilter();
+            filter.type = 'lowpass';
+            filter.frequency.value = 8000;
+            
+            // Connect nodes: source -> filter -> gain -> destination
+            source.connect(filter);
+            filter.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            
+            // Smooth start and end of audio playback
+            gainNode.gain.setValueAtTime(0, audioContext.currentTime);
+            gainNode.gain.linearRampToValueAtTime(0.8, audioContext.currentTime + 0.01);
+            gainNode.gain.linearRampToValueAtTime(0, audioContext.currentTime + buffer.duration);
+            
             source.start();
         }
     } catch (error) {
