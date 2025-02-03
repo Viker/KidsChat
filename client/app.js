@@ -193,7 +193,8 @@ async function initializeAudio() {
 // Handle incoming voice data
 socket.on('voice_data', (data) => {
     try {
-        if (audioContext && !isMuted) {
+        // Don't play audio if it's from the current user
+        if (audioContext && !isMuted && data.username !== usernameInput.value) {
             const audioData = new Float32Array(Uint8Array.from(atob(data.audio), c => c.charCodeAt(0)).buffer);
             const buffer = audioContext.createBuffer(1, audioData.length, audioContext.sampleRate);
             buffer.getChannelData(0).set(audioData);
