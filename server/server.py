@@ -14,7 +14,10 @@ socketio = SocketIO(app,
                    async_mode='threading',
                    path='/socket.io',
                    engineio_logger=True,
-                   logger=True)
+                   logger=True,
+                   # Handle WebSocket connections through proxy
+                   manage_session=False,
+                   ping_timeout=60)
 
 # Store active users and their rooms
 users = {}
