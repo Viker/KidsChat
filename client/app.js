@@ -25,9 +25,10 @@ let voiceActivityTimeout = null;
 const mutedUsers = new Set();
 
 // Socket.io connection
-const socket = io('http://localhost:5000', {
+const socket = io({
     transports: ['websocket'],
-    upgrade: false
+    upgrade: false,
+    path: '/socket.io'  // Ensure path matches the proxy configuration
 });
 
 // Add error handling for socket connection

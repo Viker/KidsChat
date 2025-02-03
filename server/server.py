@@ -7,7 +7,15 @@ app = Flask(__name__)
 # Add ProxyFix middleware to handle proxy headers
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
-CORS(app)
+# Configure CORS to accept connections from the proxy
+CORS(app, resources={
+    r"/*": {
+        "origins": "*",
+        "allow_headers": ["Content-Type", "Authorization"],
+        "methods": ["GET", "POST", "OPTIONS"]
+    }
+})
+
 app.config['SECRET_KEY'] = 'kidschat!'  # In production, use a secure secret key
 socketio = SocketIO(app, 
                    cors_allowed_origins="*",
@@ -17,7 +25,8 @@ socketio = SocketIO(app,
                    logger=True,
                    # Handle WebSocket connections through proxy
                    manage_session=False,
-                   ping_timeout=60)
+                   ping_timeout=60,
+                   ping_interval=25)
 
 # Store active users and their rooms
 users = {}
