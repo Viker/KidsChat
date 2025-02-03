@@ -8,8 +8,8 @@ RUN apt-get update && apt-get install -y git curl && \
 # Set working directory
 WORKDIR /app
 
-# Clone the repository
-RUN git clone https://github.com/Viker/KidsChat .
+# Copy the local files
+COPY . .
 
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
