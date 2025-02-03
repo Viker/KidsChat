@@ -18,6 +18,8 @@ A real-time voice chat application built with Flask, Socket.IO, and vanilla Java
 
 ## Installation
 
+### Option 1: Local Development
+
 1. Clone the repository:
 ```bash
 git clone <repository-url>
@@ -31,18 +33,56 @@ source venv/bin/activate  # On Windows use: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+### Option 2: Docker Deployment
+
+1. Clone the repository:
+```bash
+git clone <repository-url>
+cd DiscordClone
+```
+
+2. Build and run with Docker Compose:
+```bash
+docker-compose up --build
+```
+
 ## Running the Application
 
+### Local Development
 1. Start the server:
 ```bash
 cd server
 python server.py
 ```
 
-2. Open your web browser and navigate to:
+### Docker
+1. Start the container:
+```bash
+docker-compose up
+```
+
+2. To run in detached mode:
+```bash
+docker-compose up -d
+```
+
+3. To stop the container:
+```bash
+docker-compose down
+```
+
+Once running, open your web browser and navigate to:
 ```
 http://localhost:5000
 ```
+
+## Docker Commands
+
+- Build the image: `docker build -t kidschat .`
+- Run the container: `docker run -p 5000:5000 kidschat`
+- View logs: `docker-compose logs -f`
+- Restart: `docker-compose restart`
+- Stop and remove containers: `docker-compose down`
 
 ## Usage
 

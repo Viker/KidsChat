@@ -2,12 +2,21 @@ from flask import Flask, request, send_from_directory
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_cors import CORS
 import eventlet
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 eventlet.monkey_patch()
 app = Flask(__name__)
+# Add ProxyFix middleware to handle proxy headers
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
 CORS(app)
 app.config['SECRET_KEY'] = 'kidschat!'  # In production, use a secure secret key
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', 
+                   # Enable WebSocket protocol for proxy
+                   path='/socket.io',
+                   # Handle proxy websocket connections
+                   engineio_logger=True,
+                   logger=True)
 
 # Store active users and their rooms
 users = {}
@@ -137,4 +146,5 @@ def handle_mute_status(data):
 
 
 if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True, allow_unsafe_werkzeug=True)
+    # Note: In production, SSL is handled by the reverse proxy
+    socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)
