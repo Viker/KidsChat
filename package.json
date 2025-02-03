@@ -1,0 +1,25 @@
+{
+  "name": "kidschat",
+  "version": "1.0.0",
+  "description": "A real-time voice chat application with themed rooms",
+  "main": "client/app.js",
+  "scripts": {
+    "start": "cd server && python server.py"
+  },
+  "dependencies": {
+    "socket.io-client": "^4.7.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+<repository-url>"
+  },
+  "keywords": [
+    "voice-chat",
+    "websocket",
+    "real-time",
+    "flask",
+    "socket.io"
+  ],
+  "author": "",
+  "license": "MIT"
+}
