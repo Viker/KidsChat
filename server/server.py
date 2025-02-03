@@ -1,20 +1,18 @@
 from flask import Flask, request, send_from_directory
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_cors import CORS
-import eventlet
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-eventlet.monkey_patch()
 app = Flask(__name__)
 # Add ProxyFix middleware to handle proxy headers
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 CORS(app)
 app.config['SECRET_KEY'] = 'kidschat!'  # In production, use a secure secret key
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', 
-                   # Enable WebSocket protocol for proxy
+socketio = SocketIO(app, 
+                   cors_allowed_origins="*",
+                   async_mode='threading',
                    path='/socket.io',
-                   # Handle proxy websocket connections
                    engineio_logger=True,
                    logger=True)
 
