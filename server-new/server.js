@@ -87,7 +87,34 @@ const webRtcTransportSettings = {
     enableTcp: true,
     preferUdp: true,
     initialAvailableOutgoingBitrate: 1000000,
+    
+    // Add STUN/TURN server configuration for better NAT traversal
+    webRtcTransportOptions: {
+        stunServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' }
+        ],
+        // Uncomment and configure TURN servers if needed
+        // turnServers: [
+        //     {
+        //         urls: 'turn:your-turn-server.com',
+        //         username: 'your-username',
+        //         credential: 'your-password'
+        //     }
+        // ]
+    }
 };
+
+// Add more detailed logging for WebRTC transport creation
+function logTransportDetails(transport) {
+    console.log('WebRTC Transport Created:', {
+        id: transport.id,
+        iceParameters: JSON.stringify(transport.iceParameters),
+        iceCandidates: transport.iceCandidates.map(candidate => candidate.ip).join(', '),
+        dtlsParameters: JSON.stringify(transport.dtlsParameters)
+    });
+}
 
 // Initialize mediasoup workers
 async function initializeWorkers() {
@@ -217,26 +244,72 @@ io.on('connection', async (socket) => {
             room,
             users: Array.from(rooms[room].users)
         });
+
+        // Inform the new user about existing producers in the room
+        const roomProducers = Array.from(producers.values())
+            .filter(producer => {
+                const producerSocket = io.sockets.sockets.get(producer.appData.socketId);
+                return producerSocket && Array.from(producerSocket.rooms).includes(room);
+            });
+
+        for (const producer of roomProducers) {
+            // Create a new transport for each producer
+            const consumerTransport = await router.createWebRtcTransport(webRtcTransportSettings);
+            socket.emit('new_consumer', {
+                producerId: producer.id,
+                transportParams: {
+                    id: consumerTransport.id,
+                    iceParameters: consumerTransport.iceParameters,
+                    iceCandidates: consumerTransport.iceCandidates,
+                    dtlsParameters: consumerTransport.dtlsParameters,
+                }
+            });
+        }
     });
 
-    socket.on('connectTransport', async ({ transportId, dtlsParameters }, callback) => {
-        console.log(`Connecting transport [id: ${transportId}]`);
-        const transport = transports.get(transportId);
-        if (!transport) {
-            console.error(`Transport not found [id: ${transportId}]`);
-            callback({ error: 'Transport not found' });
-            return;
-        }
+socket.on('connectTransport', async ({ transportId, dtlsParameters }, callback) => {
+    console.log(`Connecting transport [id: ${transportId}]`);
+    console.log('DTLS Parameters:', JSON.stringify(dtlsParameters, null, 2));
+    
+    const transport = transports.get(transportId);
+    if (!transport) {
+        console.error(`Transport not found [id: ${transportId}]`);
+        console.error('Available transports:', Array.from(transports.keys()));
+        callback({ 
+            error: 'Transport not found', 
+            availableTransports: Array.from(transports.keys()) 
+        });
+        return;
+    }
 
-        try {
-            await transport.connect({ dtlsParameters });
-            console.log(`Transport connected successfully [id: ${transportId}]`);
-            callback({ success: true });
-        } catch (error) {
-            console.error(`Transport connection failed [id: ${transportId}]:`, error);
-            callback({ error: 'Transport connection failed' });
-        }
-    });
+    try {
+        console.log('Attempting transport connection...');
+        await transport.connect({ dtlsParameters });
+        console.log(`Transport connected successfully [id: ${transportId}]`);
+        callback({ 
+            success: true, 
+            transportId, 
+            details: 'Transport connection established' 
+        });
+    } catch (error) {
+        console.error(`Transport connection FAILED [id: ${transportId}]:`, error);
+        console.error('Full error stack:', error.stack);
+        console.error('Transport details:', JSON.stringify({
+            id: transport.id,
+            iceParameters: transport.iceParameters,
+            dtlsParameters: transport.dtlsParameters
+        }, null, 2));
+        
+        callback({ 
+            error: 'Transport connection failed', 
+            errorDetails: {
+                message: error.message,
+                name: error.name,
+                stack: error.stack
+            }
+        });
+    }
+});
 
     socket.on('produce', async ({ transportId, kind, rtpParameters }, callback) => {
         console.log(`Produce request [transportId: ${transportId}, kind: ${kind}]`);
@@ -248,9 +321,16 @@ io.on('connection', async (socket) => {
         }
 
         try {
-            const producer = await transport.produce({ kind, rtpParameters });
+            const producer = await transport.produce({ 
+                kind, 
+                rtpParameters,
+                appData: { socketId: socket.id }
+            });
             console.log(`Producer created [id: ${producer.id}, kind: ${kind}]`);
             producers.set(producer.id, producer);
+            
+            // Resume the producer immediately
+            await producer.resume();
 
             producer.on('transportclose', () => {
                 console.log(`Producer transport closed [id: ${producer.id}]`);
@@ -261,16 +341,23 @@ io.on('connection', async (socket) => {
             // Notify other users in the room about the new producer
             const currentRoom = Array.from(socket.rooms)[1];
             if (currentRoom) {
-                // Create a transport for each user in the room
-                socket.to(currentRoom).emit('new_consumer', {
-                    producerId: producer.id,
-                    transportParams: {
-                        id: transport.id,
-                        iceParameters: transport.iceParameters,
-                        iceCandidates: transport.iceCandidates,
-                        dtlsParameters: transport.dtlsParameters,
-                    }
-                });
+                // Get all other users in the room
+                const otherSockets = await io.in(currentRoom).allSockets();
+                for (const socketId of otherSockets) {
+                    if (socketId === socket.id) continue;
+                    
+                    // Create a new transport for each user
+                    const consumerTransport = await router.createWebRtcTransport(webRtcTransportSettings);
+                    io.to(socketId).emit('new_consumer', {
+                        producerId: producer.id,
+                        transportParams: {
+                            id: consumerTransport.id,
+                            iceParameters: consumerTransport.iceParameters,
+                            iceCandidates: consumerTransport.iceCandidates,
+                            dtlsParameters: consumerTransport.dtlsParameters,
+                        }
+                    });
+                }
             }
 
             callback({ id: producer.id });

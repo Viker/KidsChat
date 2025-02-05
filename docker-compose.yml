@@ -1,16 +1,33 @@
 version: '3.8'
-
 services:
-  kidschat:
+  server:
     build: .
     ports:
-      - "15000:5000"
+      - "5000:5000"
+      - "40000-49999:40000-49999/udp"
+      - "40000-49999:40000-49999/tcp"
     environment:
-      - NODE_ENV=production
-      - ANNOUNCED_IP=voicechat.ibnsina.cc
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      - PORT=5000
+      - ANNOUNCED_IP=0.0.0.0  # Replace with your actual host IP
+    volumes:
+      - ./server-new:/app/server-new
+      - ./client:/app/client
+    networks:
+      - webrtc_network
+
+  client:
+    build: 
+      context: .
+      dockerfile: Dockerfile.client
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./client:/app/client
+    networks:
+      - webrtc_network
+    depends_on:
+      - server
+
+networks:
+  webrtc_network:
+    driver: bridge

@@ -32,10 +32,9 @@ const mutedUsers = new Set();
 const audioElements = new Map(); // Store audio elements to prevent garbage collection
 
 // Socket.io connection
-const socket = io('https://voicechat.ibnsina.cc', {
+const socket = io('http://localhost:5000', {
     transports: ['websocket'],
-    upgrade: false,
-    path: '/socket.io'
+    upgrade: false
 });
 
 // Available rooms
@@ -199,7 +198,21 @@ async function createConsumerTransport(producerId, transportParams) {
         });
 
         // Resume the consumer to start receiving media
-        await consumer.resume();
+        try {
+            await consumer.resume();
+            console.log('Consumer resumed successfully');
+        } catch (error) {
+            console.error('Failed to resume consumer:', error);
+            // Try to resume again after a short delay
+            setTimeout(async () => {
+                try {
+                    await consumer.resume();
+                    console.log('Consumer resumed successfully after retry');
+                } catch (retryError) {
+                    console.error('Failed to resume consumer after retry:', retryError);
+                }
+            }, 1000);
+        }
 
         consumer.on('transportclose', () => {
             console.log('Consumer transport closed');
@@ -391,13 +404,23 @@ function updateUsersList(users) {
     });
 }
 
-function toggleMute() {
+async function toggleMute() {
     isMuted = !isMuted;
     muteButton.textContent = isMuted ? '🔇 Unmute' : '🎤 Mute';
     muteButton.classList.toggle('muted', isMuted);
     
     if (producer) {
-        producer.pause();
+        try {
+            if (isMuted) {
+                await producer.pause();
+                console.log('Producer paused');
+            } else {
+                await producer.resume();
+                console.log('Producer resumed');
+            }
+        } catch (error) {
+            console.error('Failed to toggle producer:', error);
+        }
     }
     
     if (mediaStream) {
