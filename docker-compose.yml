@@ -6,9 +6,7 @@ services:
     ports:
       - "15000:5000"
     environment:
-      - FLASK_ENV=production
-      - FLASK_APP=server/server.py
-      - PROXY_PREFIX=/  # Add this if the app is not at root URL
+      - NODE_ENV=production
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000"]

@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KidsChat - Voice Rooms</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="loginScreen">
+        <div class="login-container">
+            <h1>KidsChat</h1>
+            <div class="input-group">
+                <input type="text" id="username" placeholder="Enter your username" maxlength="20">
+                <button id="joinButton">Join Chat</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="chatScreen" class="hidden">
+        <div class="sidebar">
+            <h2>Rooms</h2>
+            <div id="roomList" class="room-list"></div>
+            
+            <h2>Users</h2>
+            <div id="usersList" class="users-list"></div>
+        </div>
+        
+        <div class="main-content">
+            <div class="room-header">
+                <h2>Room: <span id="currentRoom">General</span></h2>
+                <button id="muteButton" class="mute-button">🎤 Mute</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Socket.IO -->
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    
+    <!-- MediaSoup Client -->
+    <script src="https://cdn.jsdelivr.net/npm/mediasoup-client@3/dist/mediasoup-client.min.js"></script>
+    
+    <!-- Application Code -->
+    <script src="app-new.js"></script>
+</body>
+</html>

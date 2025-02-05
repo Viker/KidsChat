@@ -4,9 +4,14 @@
   "description": "A real-time voice chat application with themed rooms",
   "main": "client/app.js",
   "scripts": {
-    "start": "cd server && python server.py"
+    "start": "node server-new/server.js",
+    "start:old": "cd server && python server.py"
   },
   "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "mediasoup": "^3.15.3",
+    "socket.io": "^4.8.1",
     "socket.io-client": "^4.7.2"
   },
   "repository": {
