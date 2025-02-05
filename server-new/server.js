@@ -45,7 +45,7 @@ const rooms = {
 
 // Mediasoup worker settings
 const workerSettings = {
-    logLevel: 'warn',
+    logLevel: 'debug', // Changed from 'warn' to 'debug' for more verbose logging
     logTags: [
         'info',
         'ice',
@@ -93,9 +93,12 @@ const webRtcTransportSettings = {
 async function initializeWorkers() {
     const numWorkers = Object.keys(require('os').cpus()).length;
     console.log(`Creating ${numWorkers} mediasoup workers...`);
+    console.log('WebRTC Transport Settings:', JSON.stringify(webRtcTransportSettings, null, 2));
+    console.log('Announced IP:', process.env.ANNOUNCED_IP || '0.0.0.0');
 
     for (let i = 0; i < numWorkers; i++) {
         const worker = await mediasoup.createWorker(workerSettings);
+        console.log(`Worker ${i} created successfully`);
         workers.push(worker);
 
         worker.on('died', () => {
@@ -118,6 +121,7 @@ async function getRouter(roomName) {
     if (!router) {
         const worker = getNextWorker();
         router = await worker.createRouter(routerSettings);
+        console.log(`Created new router for room: ${roomName}`);
         roomRouters.set(roomName, router);
     }
     return router;
@@ -125,12 +129,13 @@ async function getRouter(roomName) {
 
 // Handle socket connections
 io.on('connection', async (socket) => {
-    console.log('Client connected');
+    console.log(`Client connected [id: ${socket.id}]`);
     const transports = new Map(); // Store transports for this client
     const producers = new Map(); // Store producers for this client
     const consumers = new Map(); // Store consumers for this client
 
     socket.on('disconnect', () => {
+        console.log(`Client disconnected [id: ${socket.id}]`);
         // Clean up user data
         if (users.has(socket.id)) {
             const username = users.get(socket.id);
@@ -142,14 +147,26 @@ io.on('connection', async (socket) => {
         }
 
         // Clean up mediasoup resources
-        consumers.forEach(consumer => consumer.close());
-        producers.forEach(producer => producer.close());
-        transports.forEach(transport => transport.close());
+        consumers.forEach(consumer => {
+            console.log(`Closing consumer [id: ${consumer.id}]`);
+            consumer.close();
+        });
+        producers.forEach(producer => {
+            console.log(`Closing producer [id: ${producer.id}]`);
+            producer.close();
+        });
+        transports.forEach(transport => {
+            console.log(`Closing transport [id: ${transport.id}]`);
+            transport.close();
+        });
     });
 
     socket.on('join', async (data, callback) => {
         const { username, room } = data;
+        console.log(`User ${username} joining room ${room}`);
+        
         if (!username || !rooms[room]) {
+            console.error(`Invalid join attempt - username: ${username}, room: ${room}`);
             callback({ error: 'Invalid username or room' });
             return;
         }
@@ -164,6 +181,20 @@ io.on('connection', async (socket) => {
 
         // Create WebRTC transport
         const transport = await router.createWebRtcTransport(webRtcTransportSettings);
+        console.log(`WebRTC transport created [id: ${transport.id}]`);
+        
+        transport.on('icestatechange', (iceState) => {
+            console.log(`Transport ICE state changed to ${iceState} [id: ${transport.id}]`);
+        });
+
+        transport.on('dtlsstatechange', (dtlsState) => {
+            console.log(`Transport DTLS state changed to ${dtlsState} [id: ${transport.id}]`);
+        });
+
+        transport.on('sctpstatechange', (sctpState) => {
+            console.log(`Transport SCTP state changed to ${sctpState} [id: ${transport.id}]`);
+        });
+
         transports.set(transport.id, transport);
 
         // Send transport parameters and router capabilities to client
@@ -189,68 +220,95 @@ io.on('connection', async (socket) => {
     });
 
     socket.on('connectTransport', async ({ transportId, dtlsParameters }, callback) => {
+        console.log(`Connecting transport [id: ${transportId}]`);
         const transport = transports.get(transportId);
         if (!transport) {
+            console.error(`Transport not found [id: ${transportId}]`);
             callback({ error: 'Transport not found' });
             return;
         }
 
-        await transport.connect({ dtlsParameters });
-        callback({ success: true });
+        try {
+            await transport.connect({ dtlsParameters });
+            console.log(`Transport connected successfully [id: ${transportId}]`);
+            callback({ success: true });
+        } catch (error) {
+            console.error(`Transport connection failed [id: ${transportId}]:`, error);
+            callback({ error: 'Transport connection failed' });
+        }
     });
 
     socket.on('produce', async ({ transportId, kind, rtpParameters }, callback) => {
+        console.log(`Produce request [transportId: ${transportId}, kind: ${kind}]`);
         const transport = transports.get(transportId);
         if (!transport) {
+            console.error(`Transport not found for produce [id: ${transportId}]`);
             callback({ error: 'Transport not found' });
             return;
         }
 
-        const producer = await transport.produce({ kind, rtpParameters });
-        producers.set(producer.id, producer);
+        try {
+            const producer = await transport.produce({ kind, rtpParameters });
+            console.log(`Producer created [id: ${producer.id}, kind: ${kind}]`);
+            producers.set(producer.id, producer);
 
-        producer.on('transportclose', () => {
-            producer.close();
-            producers.delete(producer.id);
-        });
+            producer.on('transportclose', () => {
+                console.log(`Producer transport closed [id: ${producer.id}]`);
+                producer.close();
+                producers.delete(producer.id);
+            });
 
-        callback({ id: producer.id });
+            callback({ id: producer.id });
+        } catch (error) {
+            console.error('Producer creation failed:', error);
+            callback({ error: 'Producer creation failed' });
+        }
     });
 
     socket.on('consume', async ({ transportId, producerId, rtpCapabilities }, callback) => {
+        console.log(`Consume request [transportId: ${transportId}, producerId: ${producerId}]`);
         const transport = transports.get(transportId);
         const router = roomRouters.get(Array.from(socket.rooms)[1]); // Get router for current room
 
         if (!router.canConsume({ producerId, rtpCapabilities })) {
+            console.error(`Cannot consume [transportId: ${transportId}, producerId: ${producerId}]`);
             callback({ error: 'Cannot consume' });
             return;
         }
 
-        const consumer = await transport.consume({
-            producerId,
-            rtpCapabilities,
-            paused: true
-        });
+        try {
+            const consumer = await transport.consume({
+                producerId,
+                rtpCapabilities,
+                paused: true
+            });
+            console.log(`Consumer created [id: ${consumer.id}, kind: ${consumer.kind}]`);
 
-        consumers.set(consumer.id, consumer);
+            consumers.set(consumer.id, consumer);
 
-        consumer.on('transportclose', () => {
-            consumer.close();
-            consumers.delete(consumer.id);
-        });
+            consumer.on('transportclose', () => {
+                console.log(`Consumer transport closed [id: ${consumer.id}]`);
+                consumer.close();
+                consumers.delete(consumer.id);
+            });
 
-        callback({
-            id: consumer.id,
-            producerId: producer.id,
-            kind: consumer.kind,
-            rtpParameters: consumer.rtpParameters
-        });
+            callback({
+                id: consumer.id,
+                producerId: producerId,
+                kind: consumer.kind,
+                rtpParameters: consumer.rtpParameters
+            });
+        } catch (error) {
+            console.error('Consumer creation failed:', error);
+            callback({ error: 'Consumer creation failed' });
+        }
     });
 
     // Handle voice activity
     socket.on('voice_activity', (data) => {
         const username = users.get(socket.id);
         if (username) {
+            console.log(`Voice activity from ${username} in room ${data.room}`);
             socket.to(data.room).emit('voice_activity', {
                 ...data,
                 username
@@ -262,6 +320,7 @@ io.on('connection', async (socket) => {
     socket.on('mute_status', (data) => {
         const username = users.get(socket.id);
         if (username) {
+            console.log(`Mute status change from ${username} in room ${data.room}: ${data.muted}`);
             io.to(data.room).emit('mute_status', {
                 ...data,
                 username
@@ -273,6 +332,7 @@ io.on('connection', async (socket) => {
     socket.on('leave', (data) => {
         const username = users.get(socket.id);
         if (username && data.room) {
+            console.log(`User ${username} leaving room ${data.room}`);
             socket.leave(data.room);
             rooms[data.room].users.delete(username);
             io.to(data.room).emit('user_left', {
@@ -295,15 +355,18 @@ app.get('/api/users', (req, res) => {
 
 // Initialize and start server
 async function start() {
-    await initializeWorkers();
-    
-    const port = process.env.PORT || 5000;
-    server.listen(port, () => {
-        console.log(`Server running on port ${port}`);
-    });
+    try {
+        await initializeWorkers();
+        const port = process.env.PORT || 5000;
+        server.listen(port, () => {
+            console.log(`Server running on port ${port}`);
+            console.log(`MediaSoup version: ${mediasoup.version}`);
+            console.log(`Node.js version: ${process.version}`);
+        });
+    } catch (error) {
+        console.error('Failed to start server:', error);
+        process.exit(1);
+    }
 }
 
-start().catch(error => {
-    console.error('Failed to start server:', error);
-    process.exit(1);
-});
+start();
