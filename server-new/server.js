@@ -45,7 +45,7 @@ const rooms = {
 
 // Mediasoup worker settings
 const workerSettings = {
-    logLevel: 'debug', // Changed from 'warn' to 'debug' for more verbose logging
+    logLevel: 'debug',
     logTags: [
         'info',
         'ice',
@@ -80,49 +80,27 @@ const webRtcTransportSettings = {
     listenIps: [
         {
             ip: '0.0.0.0',
-            announcedIp: process.env.ANNOUNCED_IP || '0.0.0.0' // Will be resolved to the host's IP
+            announcedIp: process.env.ANNOUNCED_IP || '0.0.0.0'
         }
     ],
     enableUdp: true,
     enableTcp: true,
     preferUdp: true,
     initialAvailableOutgoingBitrate: 1000000,
-    
-    // Add STUN/TURN server configuration for better NAT traversal
     webRtcTransportOptions: {
         stunServers: [
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
             { urls: 'stun:stun2.l.google.com:19302' }
-        ],
-        // Uncomment and configure TURN servers if needed
-        // turnServers: [
-        //     {
-        //         urls: 'turn:your-turn-server.com',
-        //         username: 'your-username',
-        //         credential: 'your-password'
-        //     }
-        // ]
+        ]
     }
 };
-
-// Add more detailed logging for WebRTC transport creation
-function logTransportDetails(transport) {
-    console.log('WebRTC Transport Created:', {
-        id: transport.id,
-        iceParameters: JSON.stringify(transport.iceParameters),
-        iceCandidates: transport.iceCandidates.map(candidate => candidate.ip).join(', '),
-        dtlsParameters: JSON.stringify(transport.dtlsParameters)
-    });
-}
 
 // Initialize mediasoup workers
 async function initializeWorkers() {
     const numWorkers = Object.keys(require('os').cpus()).length;
     console.log(`Creating ${numWorkers} mediasoup workers...`);
-    console.log('WebRTC Transport Settings:', JSON.stringify(webRtcTransportSettings, null, 2));
-    console.log('Announced IP:', process.env.ANNOUNCED_IP || '0.0.0.0');
-
+    
     for (let i = 0; i < numWorkers; i++) {
         const worker = await mediasoup.createWorker(workerSettings);
         console.log(`Worker ${i} created successfully`);
@@ -157,13 +135,12 @@ async function getRouter(roomName) {
 // Handle socket connections
 io.on('connection', async (socket) => {
     console.log(`Client connected [id: ${socket.id}]`);
-    const transports = new Map(); // Store transports for this client
-    const producers = new Map(); // Store producers for this client
-    const consumers = new Map(); // Store consumers for this client
+    const transports = new Map();
+    const producers = new Map();
+    const consumers = new Map();
 
     socket.on('disconnect', () => {
         console.log(`Client disconnected [id: ${socket.id}]`);
-        // Clean up user data
         if (users.has(socket.id)) {
             const username = users.get(socket.id);
             for (const room of Object.values(rooms)) {
@@ -173,7 +150,6 @@ io.on('connection', async (socket) => {
             io.emit('user_left', { username });
         }
 
-        // Clean up mediasoup resources
         consumers.forEach(consumer => {
             console.log(`Closing consumer [id: ${consumer.id}]`);
             consumer.close();
@@ -189,166 +165,75 @@ io.on('connection', async (socket) => {
     });
 
     socket.on('join', async (data, callback) => {
-        const { username, room } = data;
-        console.log(`User ${username} joining room ${room}`);
-        
-        if (!username || !rooms[room]) {
-            console.error(`Invalid join attempt - username: ${username}, room: ${room}`);
-            callback({ error: 'Invalid username or room' });
-            return;
-        }
-
-        // Store user information
-        users.set(socket.id, username);
-        socket.join(room);
-        rooms[room].users.add(username);
-
-        // Get or create router for the room
-        const router = await getRouter(room);
-
-        // Create WebRTC transport
-        const transport = await router.createWebRtcTransport(webRtcTransportSettings);
-        console.log(`WebRTC transport created [id: ${transport.id}]`);
-        
-        transport.on('icestatechange', (iceState) => {
-            console.log(`Transport ICE state changed to ${iceState} [id: ${transport.id}]`);
-        });
-
-        transport.on('dtlsstatechange', (dtlsState) => {
-            console.log(`Transport DTLS state changed to ${dtlsState} [id: ${transport.id}]`);
-        });
-
-        transport.on('sctpstatechange', (sctpState) => {
-            console.log(`Transport SCTP state changed to ${sctpState} [id: ${transport.id}]`);
-        });
-
-        transports.set(transport.id, transport);
-
-        // Send transport parameters and router capabilities to client
-        callback({
-            success: true,
-            room,
-            users: Array.from(rooms[room].users),
-            routerRtpCapabilities: router.rtpCapabilities,
-            transportParams: {
-                id: transport.id,
-                iceParameters: transport.iceParameters,
-                iceCandidates: transport.iceCandidates,
-                dtlsParameters: transport.dtlsParameters,
+        try {
+            const { username, room } = data;
+            console.log(`User ${username} joining room ${room}`);
+            
+            if (!username || !rooms[room]) {
+                throw new Error('Invalid username or room');
             }
-        });
 
-        // Notify others
-        socket.to(room).emit('user_joined', {
-            username,
-            room,
-            users: Array.from(rooms[room].users)
-        });
+            users.set(socket.id, username);
+            socket.join(room);
+            rooms[room].users.add(username);
 
-        // Inform the new user about existing producers in the room
-        const roomProducers = Array.from(producers.values())
-            .filter(producer => {
-                const producerSocket = io.sockets.sockets.get(producer.appData.socketId);
-                return producerSocket && Array.from(producerSocket.rooms).includes(room);
+            const router = await getRouter(room);
+            const transport = await router.createWebRtcTransport(webRtcTransportSettings);
+            
+            transports.set(transport.id, transport);
+            
+            transport.on('icestatechange', (iceState) => {
+                console.log(`Transport ICE state changed to ${iceState} [id: ${transport.id}]`);
             });
 
-        for (const producer of roomProducers) {
-            // Create a new transport for each producer
-            const consumerTransport = await router.createWebRtcTransport(webRtcTransportSettings);
-            socket.emit('new_consumer', {
-                producerId: producer.id,
-                transportParams: {
-                    id: consumerTransport.id,
-                    iceParameters: consumerTransport.iceParameters,
-                    iceCandidates: consumerTransport.iceCandidates,
-                    dtlsParameters: consumerTransport.dtlsParameters,
+            transport.on('dtlsstatechange', (dtlsState) => {
+                console.log(`Transport DTLS state changed to ${dtlsState} [id: ${transport.id}]`);
+                if (dtlsState === 'failed' || dtlsState === 'closed') {
+                    transports.delete(transport.id);
                 }
             });
-        }
-    });
 
-socket.on('connectTransport', async ({ transportId, dtlsParameters }, callback) => {
-    console.log(`Connecting transport [id: ${transportId}]`);
-    console.log('DTLS Parameters:', JSON.stringify(dtlsParameters, null, 2));
-    
-    const transport = transports.get(transportId);
-    if (!transport) {
-        console.error(`Transport not found [id: ${transportId}]`);
-        console.error('Available transports:', Array.from(transports.keys()));
-        callback({ 
-            error: 'Transport not found', 
-            availableTransports: Array.from(transports.keys()) 
-        });
-        return;
-    }
-
-    try {
-        console.log('Attempting transport connection...');
-        await transport.connect({ dtlsParameters });
-        console.log(`Transport connected successfully [id: ${transportId}]`);
-        callback({ 
-            success: true, 
-            transportId, 
-            details: 'Transport connection established' 
-        });
-    } catch (error) {
-        console.error(`Transport connection FAILED [id: ${transportId}]:`, error);
-        console.error('Full error stack:', error.stack);
-        console.error('Transport details:', JSON.stringify({
-            id: transport.id,
-            iceParameters: transport.iceParameters,
-            dtlsParameters: transport.dtlsParameters
-        }, null, 2));
-        
-        callback({ 
-            error: 'Transport connection failed', 
-            errorDetails: {
-                message: error.message,
-                name: error.name,
-                stack: error.stack
-            }
-        });
-    }
-});
-
-    socket.on('produce', async ({ transportId, kind, rtpParameters }, callback) => {
-        console.log(`Produce request [transportId: ${transportId}, kind: ${kind}]`);
-        const transport = transports.get(transportId);
-        if (!transport) {
-            console.error(`Transport not found for produce [id: ${transportId}]`);
-            callback({ error: 'Transport not found' });
-            return;
-        }
-
-        try {
-            const producer = await transport.produce({ 
-                kind, 
-                rtpParameters,
-                appData: { socketId: socket.id }
-            });
-            console.log(`Producer created [id: ${producer.id}, kind: ${kind}]`);
-            producers.set(producer.id, producer);
-            
-            // Resume the producer immediately
-            await producer.resume();
-
-            producer.on('transportclose', () => {
-                console.log(`Producer transport closed [id: ${producer.id}]`);
-                producer.close();
-                producers.delete(producer.id);
+            transport.on('close', () => {
+                console.log(`Transport closed [id: ${transport.id}]`);
+                transports.delete(transport.id);
             });
 
-            // Notify other users in the room about the new producer
-            const currentRoom = Array.from(socket.rooms)[1];
-            if (currentRoom) {
-                // Get all other users in the room
-                const otherSockets = await io.in(currentRoom).allSockets();
-                for (const socketId of otherSockets) {
-                    if (socketId === socket.id) continue;
-                    
-                    // Create a new transport for each user
+            callback({
+                success: true,
+                room,
+                users: Array.from(rooms[room].users),
+                routerRtpCapabilities: router.rtpCapabilities,
+                transportParams: {
+                    id: transport.id,
+                    iceParameters: transport.iceParameters,
+                    iceCandidates: transport.iceCandidates,
+                    dtlsParameters: transport.dtlsParameters,
+                }
+            });
+
+            socket.to(room).emit('user_joined', {
+                username,
+                room,
+                users: Array.from(rooms[room].users)
+            });
+
+            const roomProducers = Array.from(producers.values())
+                .filter(producer => {
+                    const producerSocket = io.sockets.sockets.get(producer.appData.socketId);
+                    return producerSocket && Array.from(producerSocket.rooms).includes(room);
+                });
+
+            for (const producer of roomProducers) {
+                try {
                     const consumerTransport = await router.createWebRtcTransport(webRtcTransportSettings);
-                    io.to(socketId).emit('new_consumer', {
+                    transports.set(consumerTransport.id, consumerTransport);
+                    
+                    consumerTransport.on('close', () => {
+                        console.log(`Consumer transport closed [id: ${consumerTransport.id}]`);
+                        transports.delete(consumerTransport.id);
+                    });
+
+                    socket.emit('new_consumer', {
                         producerId: producer.id,
                         transportParams: {
                             id: consumerTransport.id,
@@ -357,60 +242,121 @@ socket.on('connectTransport', async ({ transportId, dtlsParameters }, callback) 
                             dtlsParameters: consumerTransport.dtlsParameters,
                         }
                     });
+                } catch (error) {
+                    console.error('Failed to create consumer transport:', error);
+                }
+            }
+        } catch (error) {
+            console.error('Join error:', error);
+            callback({ error: error.message });
+        }
+    });
+
+    socket.on('connectTransport', async ({ transportId, dtlsParameters }, callback) => {
+        try {
+            const transport = transports.get(transportId);
+            if (!transport) {
+                throw new Error('Transport not found');
+            }
+
+            await transport.connect({ dtlsParameters });
+            callback({ success: true });
+        } catch (error) {
+            console.error('Connect transport error:', error);
+            callback({ error: error.message });
+        }
+    });
+
+    socket.on('produce', async ({ transportId, kind, rtpParameters }, callback) => {
+        try {
+            const transport = transports.get(transportId);
+            if (!transport) {
+                throw new Error('Transport not found');
+            }
+
+            const producer = await transport.produce({
+                kind,
+                rtpParameters,
+                appData: { socketId: socket.id }
+            });
+
+            producers.set(producer.id, producer);
+            await producer.resume();
+
+            producer.on('transportclose', () => {
+                producer.close();
+                producers.delete(producer.id);
+            });
+
+            const currentRoom = Array.from(socket.rooms)[1];
+            if (currentRoom) {
+                const otherSockets = await io.in(currentRoom).allSockets();
+                for (const socketId of otherSockets) {
+                    if (socketId === socket.id) continue;
+                    
+                    try {
+                        const consumerTransport = await router.createWebRtcTransport(webRtcTransportSettings);
+                        transports.set(consumerTransport.id, consumerTransport);
+
+                        io.to(socketId).emit('new_consumer', {
+                            producerId: producer.id,
+                            transportParams: {
+                                id: consumerTransport.id,
+                                iceParameters: consumerTransport.iceParameters,
+                                iceCandidates: consumerTransport.iceCandidates,
+                                dtlsParameters: consumerTransport.dtlsParameters,
+                            }
+                        });
+                    } catch (error) {
+                        console.error('Failed to create consumer transport:', error);
+                    }
                 }
             }
 
             callback({ id: producer.id });
         } catch (error) {
-            console.error('Producer creation failed:', error);
-            callback({ error: 'Producer creation failed' });
+            console.error('Produce error:', error);
+            callback({ error: error.message });
         }
     });
 
     socket.on('consume', async ({ transportId, producerId, rtpCapabilities }, callback) => {
-        console.log(`Consume request [transportId: ${transportId}, producerId: ${producerId}]`);
-        const transport = transports.get(transportId);
-        const router = roomRouters.get(Array.from(socket.rooms)[1]); // Get router for current room
-
-        if (!router.canConsume({ producerId, rtpCapabilities })) {
-            console.error(`Cannot consume [transportId: ${transportId}, producerId: ${producerId}]`);
-            callback({ error: 'Cannot consume' });
-            return;
-        }
-
         try {
+            const transport = transports.get(transportId);
+            const router = roomRouters.get(Array.from(socket.rooms)[1]);
+
+            if (!router.canConsume({ producerId, rtpCapabilities })) {
+                throw new Error('Cannot consume');
+            }
+
             const consumer = await transport.consume({
                 producerId,
                 rtpCapabilities,
                 paused: true
             });
-            console.log(`Consumer created [id: ${consumer.id}, kind: ${consumer.kind}]`);
 
             consumers.set(consumer.id, consumer);
 
             consumer.on('transportclose', () => {
-                console.log(`Consumer transport closed [id: ${consumer.id}]`);
                 consumer.close();
                 consumers.delete(consumer.id);
             });
 
             callback({
                 id: consumer.id,
-                producerId: producerId,
+                producerId,
                 kind: consumer.kind,
                 rtpParameters: consumer.rtpParameters
             });
         } catch (error) {
-            console.error('Consumer creation failed:', error);
-            callback({ error: 'Consumer creation failed' });
+            console.error('Consume error:', error);
+            callback({ error: error.message });
         }
     });
 
-    // Handle voice activity
     socket.on('voice_activity', (data) => {
         const username = users.get(socket.id);
         if (username) {
-            console.log(`Voice activity from ${username} in room ${data.room}`);
             socket.to(data.room).emit('voice_activity', {
                 ...data,
                 username
@@ -418,11 +364,9 @@ socket.on('connectTransport', async ({ transportId, dtlsParameters }, callback) 
         }
     });
 
-    // Handle mute status
     socket.on('mute_status', (data) => {
         const username = users.get(socket.id);
         if (username) {
-            console.log(`Mute status change from ${username} in room ${data.room}: ${data.muted}`);
             io.to(data.room).emit('mute_status', {
                 ...data,
                 username
@@ -430,11 +374,9 @@ socket.on('connectTransport', async ({ transportId, dtlsParameters }, callback) 
         }
     });
 
-    // Handle room switching
     socket.on('leave', (data) => {
         const username = users.get(socket.id);
         if (username && data.room) {
-            console.log(`User ${username} leaving room ${data.room}`);
             socket.leave(data.room);
             rooms[data.room].users.delete(username);
             io.to(data.room).emit('user_left', {
@@ -444,15 +386,6 @@ socket.on('connectTransport', async ({ transportId, dtlsParameters }, callback) 
             });
         }
     });
-});
-
-// API endpoints
-app.get('/api/rooms', (req, res) => {
-    res.json({ rooms: Object.keys(rooms) });
-});
-
-app.get('/api/users', (req, res) => {
-    res.json({ users: Array.from(users.values()) });
 });
 
 // Initialize and start server

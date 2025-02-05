@@ -34,8 +34,68 @@ const audioElements = new Map(); // Store audio elements to prevent garbage coll
 // Socket.io connection
 const socket = io('/', {
     transports: ['websocket'],
-    upgrade: false
+    upgrade: false,
+    reconnection: true,
+    reconnectionAttempts: 5,
+    reconnectionDelay: 1000,
+    timeout: 10000
 });
+
+// Track connection state
+let isConnecting = false;
+
+// Socket connection status
+socket.on('connect', () => {
+    console.log('Socket connected successfully');
+    isConnecting = false;
+});
+
+socket.on('connect_error', (error) => {
+    console.error('Socket connection error:', error);
+    if (!isConnecting) {
+        alert('Failed to connect to server. Please try again.');
+    }
+    isConnecting = true;
+});
+
+socket.on('error', (error) => {
+    console.error('Socket error:', error);
+    showLoginScreen();
+});
+
+socket.on('disconnect', () => {
+    console.log('Socket disconnected');
+    showLoginScreen();
+});
+
+function showLoginScreen() {
+    // Hide chat screen and show login screen
+    loginScreen.classList.remove('hidden');
+    chatScreen.classList.add('hidden');
+    
+    // Clean up resources
+    if (producer) {
+        producer.close();
+        producer = null;
+    }
+    if (producerTransport) {
+        producerTransport.close();
+        producerTransport = null;
+    }
+    consumers.forEach(consumer => consumer.close());
+    consumerTransports.forEach(transport => transport.close());
+    consumers.clear();
+    consumerTransports.clear();
+    audioElements.forEach(element => {
+        element.srcObject = null;
+    });
+    audioElements.clear();
+}
+
+function showChatScreen() {
+    loginScreen.classList.add('hidden');
+    chatScreen.classList.remove('hidden');
+}
 
 // Available rooms
 const rooms = ['General', 'Games', 'Music'];
@@ -43,15 +103,55 @@ let currentRoom = 'General';
 
 // Initialize the application
 async function init() {
-    setupEventListeners();
-    populateRooms();
-    
-    // Load mediasoup device
     try {
-        device = new mediasoupClient.Device();
+        console.log('Initializing application...');
+        
+        // Reset state
+        if (producer) producer.close();
+        if (producerTransport) producerTransport.close();
+        consumers.forEach(consumer => consumer.close());
+        consumerTransports.forEach(transport => transport.close());
+        consumers.clear();
+        consumerTransports.clear();
+        audioElements.forEach(element => {
+            element.srcObject = null;
+        });
+        audioElements.clear();
+        
+        // Ensure chat screen is hidden initially
+        chatScreen.classList.add('hidden');
+        loginScreen.classList.remove('hidden');
+        
+        setupEventListeners();
+        populateRooms();
+        
+        // Load mediasoup device
+        const MediasoupClientLib = window.mediasoupClient || window.MediasoupClient;
+        if (!MediasoupClientLib) {
+            throw new Error('MediaSoup client library not loaded');
+        }
+        device = new MediasoupClientLib.Device();
+        console.log('MediaSoup device initialized successfully');
+        
+        // Verify socket connection
+        if (!socket.connected) {
+            console.log('Socket not connected, waiting for connection...');
+            await new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    reject(new Error('Socket connection timeout'));
+                }, 5000);
+                
+                socket.once('connect', () => {
+                    clearTimeout(timeout);
+                    resolve();
+                });
+            });
+        }
+        
+        console.log('Application initialized successfully');
     } catch (error) {
-        console.error('Failed to create mediasoup device:', error);
-        return;
+        console.error('Failed to initialize application:', error);
+        alert('Failed to initialize application. Please refresh the page.');
     }
 }
 
@@ -77,24 +177,38 @@ async function handleJoin() {
     const username = usernameInput.value.trim();
     if (!username) return;
 
+    if (!socket.connected) {
+        console.error('Socket not connected');
+        alert('Not connected to server. Please wait or refresh the page.');
+        return;
+    }
+
     try {
         await initializeAudio();
-        socket.emit('join', { username, room: currentRoom }, async (response) => {
-            if (response.error) {
-                alert(response.error);
-                return;
-            }
+        
+        // Wrap socket emit in a promise for better error handling
+        const response = await new Promise((resolve, reject) => {
+            socket.emit('join', { username, room: currentRoom }, (response) => {
+                if (response.error) {
+                    reject(new Error(response.error));
+                } else {
+                    resolve(response);
+                }
+            });
 
-            // Load device with router capabilities
-            await loadDevice(response.routerRtpCapabilities);
-            
-            // Create send transport after device is loaded
-            await createSendTransport(response.transportParams);
-
-            loginScreen.classList.add('hidden');
-            chatScreen.classList.remove('hidden');
-            updateUsersList(response.users);
+            // Add timeout for the response
+            setTimeout(() => reject(new Error('Join request timed out')), 5000);
         });
+
+        // Load device with router capabilities
+        await loadDevice(response.routerRtpCapabilities);
+        
+        // Create send transport after device is loaded
+        await createSendTransport(response.transportParams);
+
+        showChatScreen();
+        updateUsersList(response.users);
+        console.log('Successfully joined chat');
     } catch (error) {
         console.error('Join error:', error);
         alert('Failed to join: ' + error.message);
@@ -114,29 +228,56 @@ async function loadDevice(routerRtpCapabilities) {
 
 async function createSendTransport(transportParams) {
     try {
+        console.log('Creating send transport with params:', transportParams);
         producerTransport = device.createSendTransport(transportParams);
 
         producerTransport.on('connect', async ({ dtlsParameters }, callback, errback) => {
+            console.log('Producer transport connect event');
             try {
-                await socket.emit('connectTransport', {
-                    transportId: transportParams.id,
-                    dtlsParameters
+                const response = await new Promise((resolve, reject) => {
+                    socket.emit('connectTransport', {
+                        transportId: transportParams.id,
+                        dtlsParameters
+                    }, (response) => {
+                        if (response.error) {
+                            reject(new Error(response.error));
+                        } else {
+                            resolve(response);
+                        }
+                    });
+                    // Add timeout for the response
+                    setTimeout(() => reject(new Error('Transport connect timed out')), 5000);
                 });
+                console.log('Producer transport connected successfully');
                 callback();
             } catch (error) {
+                console.error('Producer transport connect failed:', error);
                 errback(error);
             }
         });
 
         producerTransport.on('produce', async ({ kind, rtpParameters }, callback, errback) => {
+            console.log('Producer transport produce event');
             try {
-                const { id } = await socket.emit('produce', {
-                    transportId: producerTransport.id,
-                    kind,
-                    rtpParameters
+                const response = await new Promise((resolve, reject) => {
+                    socket.emit('produce', {
+                        transportId: producerTransport.id,
+                        kind,
+                        rtpParameters
+                    }, (response) => {
+                        if (response.error) {
+                            reject(new Error(response.error));
+                        } else {
+                            resolve(response);
+                        }
+                    });
+                    // Add timeout for the response
+                    setTimeout(() => reject(new Error('Produce request timed out')), 5000);
                 });
-                callback({ id });
+                console.log('Producer created successfully');
+                callback({ id: response.id });
             } catch (error) {
+                console.error('Producer creation failed:', error);
                 errback(error);
             }
         });
@@ -175,21 +316,39 @@ async function createConsumerTransport(producerId, transportParams) {
     while (retryCount < maxRetries) {
         try {
             const consumerTransport = device.createRecvTransport(transportParams);
+            console.log('Created consumer transport:', consumerTransport.id);
 
             consumerTransport.on('connect', async ({ dtlsParameters }, callback, errback) => {
+                console.log('Consumer transport connect event', transportParams.id);
                 try {
-                    await socket.emit('connectTransport', {
-                        transportId: transportParams.id,
-                        dtlsParameters
+                    const response = await new Promise((resolve, reject) => {
+                        socket.emit('connectTransport', {
+                            transportId: transportParams.id,
+                            dtlsParameters
+                        }, (response) => {
+                            if (response.error) {
+                                reject(new Error(response.error));
+                            } else {
+                                resolve(response);
+                            }
+                        });
+                        // Add timeout for the response
+                        setTimeout(() => reject(new Error('Consumer transport connect timed out')), 5000);
                     });
+                    console.log('Consumer transport connected successfully');
                     callback();
                 } catch (error) {
+                    console.error('Consumer transport connect failed:', error);
                     errback(error);
+                    // Clean up the failed transport
+                    consumerTransport.close();
+                    throw error;
                 }
             });
 
             // Request consumer parameters from server
             const { rtpParameters, id, kind } = await new Promise((resolve, reject) => {
+                console.log('Requesting consumer parameters');
                 socket.emit('consume', {
                     transportId: consumerTransport.id,
                     producerId,
@@ -198,9 +357,12 @@ async function createConsumerTransport(producerId, transportParams) {
                     if (response.error) {
                         reject(new Error(response.error));
                     } else {
+                        console.log('Received consumer parameters');
                         resolve(response);
                     }
                 });
+                // Add timeout for the response
+                setTimeout(() => reject(new Error('Consumer parameters request timed out')), 5000);
             });
 
             const consumer = await consumerTransport.consume({
