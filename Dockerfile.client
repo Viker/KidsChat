@@ -2,8 +2,8 @@ FROM node:18-alpine
 
 WORKDIR /app/client
 
-# Install Python and other build dependencies
-RUN apk add --no-cache python3 make g++ gcc
+# Install Python, pip, and other build dependencies
+RUN apk add --no-cache python3 py3-pip make g++ gcc linux-headers python3-dev musl-dev
 
 # Copy package.json and package-lock.json
 COPY package*.json ./
