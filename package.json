@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "A real-time voice chat application with themed rooms",
   "main": "client/app.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "start": "node server-new/server.js",
     "start:old": "cd server && python server.py"
