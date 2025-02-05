@@ -48,7 +48,7 @@ async function init() {
     
     // Load mediasoup device
     try {
-        device = new MediasoupClient.Device();
+        device = new mediasoupClient.Device();
     } catch (error) {
         console.error('Failed to create mediasoup device:', error);
         return;
