@@ -8,7 +8,9 @@ services:
       - "40000-49999:40000-49999/tcp"
     environment:
       - PORT=5000
-      - ANNOUNCED_IP=0.0.0.0  # Replace with your actual host IP
+      - ANNOUNCED_IP=0.0.0.0
+      - VIRTUAL_HOST=voicechat.ibnsina.cc
+      - LETSENCRYPT_HOST=voicechat.ibnsina.cc
     volumes:
       - ./server-new:/app/server-new
       - ./client:/app/client
@@ -27,6 +29,9 @@ services:
       - webrtc_network
     depends_on:
       - server
+    environment:
+      - VIRTUAL_HOST=voicechat.ibnsina.cc
+      - LETSENCRYPT_HOST=voicechat.ibnsina.cc
 
 networks:
   webrtc_network:
