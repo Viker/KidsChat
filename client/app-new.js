@@ -113,34 +113,34 @@ async function loadDevice(routerRtpCapabilities) {
 }
 
 async function createSendTransport(transportParams) {
-    producerTransport = device.createSendTransport(transportParams);
-
-    producerTransport.on('connect', async ({ dtlsParameters }, callback, errback) => {
-        try {
-            await socket.emit('connectTransport', {
-                transportId: transportParams.id,
-                dtlsParameters
-            });
-            callback();
-        } catch (error) {
-            errback(error);
-        }
-    });
-
-    producerTransport.on('produce', async ({ kind, rtpParameters }, callback, errback) => {
-        try {
-            const { id } = await socket.emit('produce', {
-                transportId: producerTransport.id,
-                kind,
-                rtpParameters
-            });
-            callback({ id });
-        } catch (error) {
-            errback(error);
-        }
-    });
-
     try {
+        producerTransport = device.createSendTransport(transportParams);
+
+        producerTransport.on('connect', async ({ dtlsParameters }, callback, errback) => {
+            try {
+                await socket.emit('connectTransport', {
+                    transportId: transportParams.id,
+                    dtlsParameters
+                });
+                callback();
+            } catch (error) {
+                errback(error);
+            }
+        });
+
+        producerTransport.on('produce', async ({ kind, rtpParameters }, callback, errback) => {
+            try {
+                const { id } = await socket.emit('produce', {
+                    transportId: producerTransport.id,
+                    kind,
+                    rtpParameters
+                });
+                callback({ id });
+            } catch (error) {
+                errback(error);
+            }
+        });
+
         producer = await producerTransport.produce({
             track: audioTrack,
             codecOptions: {
@@ -159,6 +159,8 @@ async function createSendTransport(transportParams) {
             producer.close();
             producer = null;
         });
+
+        return producer;
     } catch (error) {
         console.error('Failed to create producer:', error);
         throw error;
@@ -166,104 +168,119 @@ async function createSendTransport(transportParams) {
 }
 
 async function createConsumerTransport(producerId, transportParams) {
-    const consumerTransport = device.createRecvTransport(transportParams);
+    let retryCount = 0;
+    const maxRetries = 3;
+    const retryDelay = 1000;
 
-    consumerTransport.on('connect', async ({ dtlsParameters }, callback, errback) => {
+    while (retryCount < maxRetries) {
         try {
-            await socket.emit('connectTransport', {
-                transportId: transportParams.id,
-                dtlsParameters
+            const consumerTransport = device.createRecvTransport(transportParams);
+
+            consumerTransport.on('connect', async ({ dtlsParameters }, callback, errback) => {
+                try {
+                    await socket.emit('connectTransport', {
+                        transportId: transportParams.id,
+                        dtlsParameters
+                    });
+                    callback();
+                } catch (error) {
+                    errback(error);
+                }
             });
-            callback();
-        } catch (error) {
-            errback(error);
-        }
-    });
 
-    try {
-        // First request consumer parameters from server
-        const { rtpParameters, id, kind } = await new Promise((resolve) => {
-            socket.emit('consume', {
-                transportId: consumerTransport.id,
+            // Request consumer parameters from server
+            const { rtpParameters, id, kind } = await new Promise((resolve, reject) => {
+                socket.emit('consume', {
+                    transportId: consumerTransport.id,
+                    producerId,
+                    rtpCapabilities: device.rtpCapabilities
+                }, (response) => {
+                    if (response.error) {
+                        reject(new Error(response.error));
+                    } else {
+                        resolve(response);
+                    }
+                });
+            });
+
+            const consumer = await consumerTransport.consume({
+                id,
                 producerId,
-                rtpCapabilities: device.rtpCapabilities
-            }, resolve);
-        });
+                kind,
+                rtpParameters
+            });
 
-        const consumer = await consumerTransport.consume({
-            id,
-            producerId,
-            kind,
-            rtpParameters
-        });
-
-        // Resume the consumer to start receiving media
-        try {
-            await consumer.resume();
-            console.log('Consumer resumed successfully');
-        } catch (error) {
-            console.error('Failed to resume consumer:', error);
-            // Try to resume again after a short delay
-            setTimeout(async () => {
+            // Resume the consumer with retry logic
+            let resumed = false;
+            for (let i = 0; i < 3; i++) {
                 try {
                     await consumer.resume();
-                    console.log('Consumer resumed successfully after retry');
-                } catch (retryError) {
-                    console.error('Failed to resume consumer after retry:', retryError);
+                    resumed = true;
+                    break;
+                } catch (error) {
+                    console.warn(`Resume attempt ${i + 1} failed:`, error);
+                    await new Promise(resolve => setTimeout(resolve, 1000));
                 }
-            }, 1000);
-        }
-
-        consumer.on('transportclose', () => {
-            console.log('Consumer transport closed');
-        });
-
-        consumerTransports.set(producerId, consumerTransport);
-        consumers.set(producerId, consumer);
-
-        const stream = new MediaStream([consumer.track]);
-        const audioElement = new Audio();
-        audioElement.srcObject = stream;
-        audioElement.autoplay = true;
-        audioElement.volume = 1.0;
-        
-        // Store audio element
-        audioElements.set(producerId, audioElement);
-        
-        const playPromise = audioElement.play();
-        if (playPromise !== undefined) {
-            playPromise.catch(error => {
-                console.error('Audio playback failed:', error);
-                // Try to play again after user interaction
-                document.addEventListener('click', () => {
-                    audioElement.play().catch(console.error);
-                }, { once: true });
-            });
-        }
-
-        // Clean up when consumer is closed
-        consumer.on('close', () => {
-            const element = audioElements.get(producerId);
-            if (element) {
-                element.srcObject = null;
-                audioElements.delete(producerId);
             }
-        });
 
-    } catch (error) {
-        console.error('Failed to create consumer:', error);
-        consumerTransport.close();
+            if (!resumed) {
+                throw new Error('Failed to resume consumer after multiple attempts');
+            }
+
+            consumer.on('transportclose', () => {
+                console.log('Consumer transport closed');
+                const element = audioElements.get(producerId);
+                if (element) {
+                    element.srcObject = null;
+                    audioElements.delete(producerId);
+                }
+            });
+
+            consumerTransports.set(producerId, consumerTransport);
+            consumers.set(producerId, consumer);
+
+            const stream = new MediaStream([consumer.track]);
+            const audioElement = new Audio();
+            audioElement.srcObject = stream;
+            audioElement.autoplay = true;
+            audioElement.volume = 1.0;
+            
+            audioElements.set(producerId, audioElement);
+            
+            try {
+                await audioElement.play();
+            } catch (error) {
+                console.warn('Auto-play failed, waiting for user interaction:', error);
+                const playOnInteraction = async () => {
+                    try {
+                        await audioElement.play();
+                        document.removeEventListener('click', playOnInteraction);
+                    } catch (playError) {
+                        console.error('Play on interaction failed:', playError);
+                    }
+                };
+                document.addEventListener('click', playOnInteraction);
+            }
+
+            return consumer;
+        } catch (error) {
+            console.error(`Consumer creation attempt ${retryCount + 1} failed:`, error);
+            retryCount++;
+            if (retryCount === maxRetries) {
+                console.error('Max retries reached for consumer creation');
+                throw error;
+            }
+            await new Promise(resolve => setTimeout(resolve, retryDelay));
+        }
     }
 }
 
 async function initializeAudio() {
     try {
-        // Check if browser supports required APIs
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             throw new Error('Your browser does not support audio input. Please use a modern browser.');
         }
 
-        // First check if we have audio permissions
         try {
             const permissions = await navigator.permissions.query({ name: 'microphone' });
             if (permissions.state === 'denied') {
@@ -285,10 +302,8 @@ async function initializeAudio() {
 
         audioTrack = mediaStream.getAudioTracks()[0];
         
-        // Set up voice activity detection
         audioContext = new AudioContext();
         
-        // Resume audio context after user interaction
         if (audioContext.state === 'suspended') {
             const resumeAudio = async () => {
                 await audioContext.resume();
@@ -355,32 +370,67 @@ function emitVoiceActivity(isSpeaking) {
 }
 
 async function switchRoom(newRoom) {
-    if (speaking) {
-        speaking = false;
-        emitVoiceActivity(false);
-    }
-    
-    // Clean up existing consumers and transports
-    consumers.forEach(consumer => consumer.close());
-    consumerTransports.forEach(transport => transport.close());
-    consumers.clear();
-    consumerTransports.clear();
-    
-    socket.emit('leave', { room: currentRoom });
-    currentRoom = newRoom;
-    
-    socket.emit('join', { 
-        username: usernameInput.value,
-        room: newRoom 
-    }, async (response) => {
-        if (response.success) {
-            updateRoomUI(newRoom);
-            updateUsersList(response.users);
-            
-            // Set up new transport for the new room
-            await createSendTransport(response.transportParams);
+    try {
+        if (speaking) {
+            speaking = false;
+            emitVoiceActivity(false);
         }
-    });
+        
+        // Clean up existing producer and transport
+        if (producer) {
+            producer.close();
+            producer = null;
+        }
+        if (producerTransport) {
+            producerTransport.close();
+            producerTransport = null;
+        }
+
+        // Clean up existing consumers and transports
+        consumers.forEach(consumer => consumer.close());
+        consumerTransports.forEach(transport => transport.close());
+        consumers.clear();
+        consumerTransports.clear();
+        
+        // Clean up audio elements
+        audioElements.forEach(element => {
+            element.srcObject = null;
+        });
+        audioElements.clear();
+        
+        socket.emit('leave', { room: currentRoom });
+        currentRoom = newRoom;
+        
+        return new Promise((resolve, reject) => {
+            socket.emit('join', { 
+                username: usernameInput.value,
+                room: newRoom 
+            }, async (response) => {
+                try {
+                    if (response.error) {
+                        throw new Error(response.error);
+                    }
+                    
+                    updateRoomUI(newRoom);
+                    updateUsersList(response.users);
+                    
+                    // Load device with new router capabilities
+                    await loadDevice(response.routerRtpCapabilities);
+                    
+                    // Set up new transport for the new room
+                    await createSendTransport(response.transportParams);
+                    
+                    resolve();
+                } catch (error) {
+                    console.error('Error switching room:', error);
+                    reject(error);
+                }
+            });
+        });
+    } catch (error) {
+        console.error('Failed to switch room:', error);
+        alert('Failed to switch room: ' + error.message);
+    }
 }
 
 function updateRoomUI(room) {
@@ -493,7 +543,6 @@ window.addEventListener('beforeunload', () => {
     if (mediaStream) {
         mediaStream.getTracks().forEach(track => track.stop());
     }
-    // Clean up audio elements
     audioElements.forEach(element => {
         element.srcObject = null;
     });
