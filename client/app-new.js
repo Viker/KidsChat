@@ -32,7 +32,7 @@ const mutedUsers = new Set();
 const audioElements = new Map(); // Store audio elements to prevent garbage collection
 
 // Socket.io connection
-const socket = io('http://192.168.68.61:15000', {
+const socket = io('https://voicechat.ibnsina.cc', {
     transports: ['websocket'],
     upgrade: false,
     path: '/socket.io'
