@@ -1,6 +1,6 @@
 version: '3.8'
 services:
-  server:
+  app:
     build: .
     ports:
       - "5000:5000"
@@ -16,22 +16,6 @@ services:
       - ./client:/app/client
     networks:
       - webrtc_network
-
-  client:
-    build: 
-      context: .
-      dockerfile: Dockerfile.client
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./client:/app/client
-    networks:
-      - webrtc_network
-    depends_on:
-      - server
-    environment:
-      - VIRTUAL_HOST=voicechat.ibnsina.cc
-      - LETSENCRYPT_HOST=voicechat.ibnsina.cc
 
 networks:
   webrtc_network:
