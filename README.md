@@ -73,7 +73,7 @@ docker-compose down
 
 Once running, open your web browser and navigate to:
 ```
-http://localhost:5000
+https://voicechat.ibnsina.cc
 ```
 
 ## Docker Commands
