@@ -80,7 +80,7 @@ const webRtcTransportSettings = {
     listenIps: [
         {
             ip: '0.0.0.0',
-            announcedIp: '127.0.0.1' // Change this to your public IP in production
+            announcedIp: process.env.ANNOUNCED_IP || '0.0.0.0' // Will be resolved to the host's IP
         }
     ],
     enableUdp: true,

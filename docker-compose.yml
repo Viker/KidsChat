@@ -7,6 +7,7 @@ services:
       - "15000:5000"
     environment:
       - NODE_ENV=production
+      - ANNOUNCED_IP=0.0.0.0
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000"]

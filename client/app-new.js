@@ -181,11 +181,24 @@ async function createConsumerTransport(producerId, transportParams) {
     });
 
     try {
-        const consumer = await consumerTransport.consume({
-            id: producerId,
-            producerId,
-            rtpCapabilities: device.rtpCapabilities
+        // First request consumer parameters from server
+        const { rtpParameters, id, kind } = await new Promise((resolve) => {
+            socket.emit('consume', {
+                transportId: consumerTransport.id,
+                producerId,
+                rtpCapabilities: device.rtpCapabilities
+            }, resolve);
         });
+
+        const consumer = await consumerTransport.consume({
+            id,
+            producerId,
+            kind,
+            rtpParameters
+        });
+
+        // Resume the consumer to start receiving media
+        await consumer.resume();
 
         consumer.on('transportclose', () => {
             console.log('Consumer transport closed');
@@ -207,6 +220,21 @@ async function createConsumerTransport(producerId, transportParams) {
 
 async function initializeAudio() {
     try {
+        // Check if browser supports required APIs
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            throw new Error('Your browser does not support audio input. Please use a modern browser.');
+        }
+
+        // First check if we have audio permissions
+        try {
+            const permissions = await navigator.permissions.query({ name: 'microphone' });
+            if (permissions.state === 'denied') {
+                throw new Error('Microphone access is blocked. Please allow microphone access in your browser settings.');
+            }
+        } catch (permError) {
+            console.warn('Permissions API not supported, falling back to getUserMedia');
+        }
+
         mediaStream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: true,
@@ -229,7 +257,19 @@ async function initializeAudio() {
         detectVoiceActivity();
     } catch (error) {
         console.error('Error initializing audio:', error);
-        throw error;
+        let errorMessage = 'Failed to access microphone: ';
+        
+        if (error.name === 'NotAllowedError') {
+            errorMessage += 'Please allow microphone access when prompted by your browser.';
+        } else if (error.name === 'NotFoundError') {
+            errorMessage += 'No microphone found. Please check your audio input device.';
+        } else if (error.name === 'NotReadableError') {
+            errorMessage += 'Your microphone is busy or not working properly.';
+        } else {
+            errorMessage += error.message;
+        }
+        
+        throw new Error(errorMessage);
     }
 }
 
