@@ -27,11 +27,12 @@ let speaking = false;
 const VOICE_THRESHOLD = 0.02;
 let voiceActivityTimeout = null;
 
-// Track muted users
+// Track muted users and audio elements
 const mutedUsers = new Set();
+const audioElements = new Map(); // Store audio elements to prevent garbage collection
 
 // Socket.io connection
-const socket = io({
+const socket = io('http://192.168.68.61:15000', {
     transports: ['websocket'],
     upgrade: false,
     path: '/socket.io'
@@ -210,7 +211,31 @@ async function createConsumerTransport(producerId, transportParams) {
         const stream = new MediaStream([consumer.track]);
         const audioElement = new Audio();
         audioElement.srcObject = stream;
-        audioElement.play();
+        audioElement.autoplay = true;
+        audioElement.volume = 1.0;
+        
+        // Store audio element
+        audioElements.set(producerId, audioElement);
+        
+        const playPromise = audioElement.play();
+        if (playPromise !== undefined) {
+            playPromise.catch(error => {
+                console.error('Audio playback failed:', error);
+                // Try to play again after user interaction
+                document.addEventListener('click', () => {
+                    audioElement.play().catch(console.error);
+                }, { once: true });
+            });
+        }
+
+        // Clean up when consumer is closed
+        consumer.on('close', () => {
+            const element = audioElements.get(producerId);
+            if (element) {
+                element.srcObject = null;
+                audioElements.delete(producerId);
+            }
+        });
 
     } catch (error) {
         console.error('Failed to create consumer:', error);
@@ -249,6 +274,18 @@ async function initializeAudio() {
         
         // Set up voice activity detection
         audioContext = new AudioContext();
+        
+        // Resume audio context after user interaction
+        if (audioContext.state === 'suspended') {
+            const resumeAudio = async () => {
+                await audioContext.resume();
+                document.removeEventListener('click', resumeAudio);
+                document.removeEventListener('touchstart', resumeAudio);
+            };
+            document.addEventListener('click', resumeAudio);
+            document.addEventListener('touchstart', resumeAudio);
+        }
+        
         const source = audioContext.createMediaStreamSource(mediaStream);
         analyser = audioContext.createAnalyser();
         analyser.fftSize = 1024;
@@ -385,6 +422,14 @@ socket.on('user_joined', (data) => {
     updateUsersList(data.users);
 });
 
+socket.on('new_consumer', async (data) => {
+    try {
+        await createConsumerTransport(data.producerId, data.transportParams);
+    } catch (error) {
+        console.error('Failed to create consumer transport:', error);
+    }
+});
+
 socket.on('user_left', (data) => {
     updateUsersList(data.users);
 });
@@ -425,6 +470,11 @@ window.addEventListener('beforeunload', () => {
     if (mediaStream) {
         mediaStream.getTracks().forEach(track => track.stop());
     }
+    // Clean up audio elements
+    audioElements.forEach(element => {
+        element.srcObject = null;
+    });
+    audioElements.clear();
 });
 
 // Initialize the app

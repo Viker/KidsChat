@@ -258,6 +258,21 @@ io.on('connection', async (socket) => {
                 producers.delete(producer.id);
             });
 
+            // Notify other users in the room about the new producer
+            const currentRoom = Array.from(socket.rooms)[1];
+            if (currentRoom) {
+                // Create a transport for each user in the room
+                socket.to(currentRoom).emit('new_consumer', {
+                    producerId: producer.id,
+                    transportParams: {
+                        id: transport.id,
+                        iceParameters: transport.iceParameters,
+                        iceCandidates: transport.iceCandidates,
+                        dtlsParameters: transport.dtlsParameters,
+                    }
+                });
+            }
+
             callback({ id: producer.id });
         } catch (error) {
             console.error('Producer creation failed:', error);
